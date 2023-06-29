@@ -15,7 +15,7 @@ static vector<unique_ptr<DosClient>> run_clients(int num_of_clients)
     vector<unique_ptr<DosClient>> dos_clients;
     for (int i = 0; i < num_of_clients; i++)
     {
-        dos_clients.push_back(make_unique<DosClient>(i, "127.0.0.1", 8000));
+        dos_clients.push_back(make_unique<DosClient>(i, "127.0.0.1", 8080));
     }
     return dos_clients;
 }
