@@ -71,13 +71,80 @@ static int extract_client_id(const string &request)
     return -1;
 }
 
-static void http_listen()
+static void server_runner(SafeMsgQueue<DosServer::RequestMsg> &msg_queue)
+{
+    while (!exit_thread_flag)
+    {
+        auto msg = msg_queue.dequeue();
+
+        int client_id_from_request = extract_client_id(msg.request);
+        if (client_id_from_request < 0)
+        {
+            if (client_id_from_request == -1)
+            {
+                cout << "Stop requested. Shutting down..." << endl;
+            }
+            else
+            {
+                cout << "Illegal client request: " << msg.request << endl;
+                close(msg.sockfd);
+            }
+            continue;
+        }
+
+        if (!send_response(msg.sockfd, client_id_from_request))
+        {
+            cout << "Unable to send response to client" << endl;
+            close(msg.sockfd);
+            continue;
+        }
+
+        close(msg.sockfd);
+    }
+}
+
+static void server_thread(int sockfd, SafeMsgQueue<DosServer::RequestMsg> &msg_queue)
+{
+    sockaddr_in client_addr;
+    socklen_t client_addr_len = sizeof(client_addr);
+    while (!exit_thread_flag)
+    {
+        int newsockfd = accept(sockfd, (struct sockaddr *) &client_addr, &client_addr_len);
+        if (newsockfd < 0)
+        {
+            cout << "Unable to accept new connection" << endl;
+            continue;
+        }
+
+        cout << "Got new connection from " << inet_ntoa(client_addr.sin_addr)
+             << ":" << ntohs(client_addr.sin_port) << endl;
+
+        char buffer[256];
+        int bytes_read = read(newsockfd, buffer, 255);
+        if (bytes_read < 0)
+        {
+            cout << "Unable to read from netsockfd" << endl;
+            close(newsockfd);
+            continue;
+        }
+        else
+        {
+            cout << "Got from client: " << buffer << endl;
+        }
+
+        string request(buffer, bytes_read);
+        DosServer::RequestMsg msg = { request, newsockfd };
+        msg_queue.enqueue(msg);
+    }
+}
+
+static int http_listen()
 {
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0)
     {
         cout << "Unable to create socket" << endl;
-        return;
+        return -1;
     }
 
     cout << "Socket " << sockfd << " created" << endl;
@@ -87,12 +154,11 @@ static void http_listen()
     {
         cout << "Unable to set socket option" << endl;
         close(sockfd);
-        return;
+        return -1;
     }
 
     sockaddr_in serv_addr;
     memset(&serv_addr, 0, sizeof(serv_addr));
-    //inet_pton(AF_INET, INADDR_ANY, &(serv_addr.sin_addr));
     serv_addr.sin_addr.s_addr = INADDR_ANY;
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(SERVER_PORT);
@@ -101,81 +167,62 @@ static void http_listen()
     {
         cout << "Unable to bind address" << endl;
         close(sockfd);
-        return;
+        return -1;
     }
 
     listen(sockfd, 5);
 
-    sockaddr_in client_addr;
-    socklen_t client_addr_len = sizeof(client_addr);
-    int newsockfd = accept(sockfd, (struct sockaddr *) &client_addr, &client_addr_len);
-    if (newsockfd < 0)
-    {
-        cout << "Unable to accept new connection" << endl;
-        close(sockfd);
-        return;
-    }
-
-    cout << "Got new connection from " << inet_ntoa(client_addr.sin_addr)
-         << ":" << ntohs(client_addr.sin_port) << endl;
-
-    char buffer[256];
-    int bytes_read = read(newsockfd, buffer, 255);
-    if (bytes_read < 0)
-    {
-        cout << "Unable to read from netsockfd" << endl;
-        close(newsockfd);
-        close(sockfd);
-        return;
-    }
-    else
-    {
-        cout << "Got from client: " << buffer << endl;
-    }
-
-    string request(buffer, bytes_read);
-
-    int client_id_from_request = extract_client_id(request);
-    if (client_id_from_request < 0)
-    {
-        cout << "Illegal client request: " << request << endl;
-        close(newsockfd);
-        close(sockfd);
-        return;
-    }
-
-    if (!send_response(newsockfd, client_id_from_request))
-    {
-        cout << "Unable to send response to client" << endl;
-        close(newsockfd);
-        close(sockfd);
-        return;
-    }
-
-    cout << "Done handling request" << endl;
-
-    close(newsockfd);
-    close(sockfd);
+    return sockfd;
 }
 
-static void do_serve()
+static void do_serve(SafeMsgQueue<DosServer::RequestMsg> &msg_queue)
 {
     while (!exit_thread_flag)
     {
         http_listen();
-        sleep(1);
     }
 }
 
 DosServer::DosServer() :
-    m_runner(do_serve)
+    m_sockfd(http_listen()),
+    m_server(thread([&]{server_thread(m_sockfd, m_msg_queue);}))
 {
+    auto processor_count = thread::hardware_concurrency();
+    if (processor_count == 0)
+    {
+        processor_count = 2;
+    }
+
+    cout << "Creating " << processor_count << " runners..." << endl;
+    for (auto i = 0; i < processor_count; i++)
+    {
+        m_runners.push_back(thread([&]{server_runner(m_msg_queue);}));
+    }
+}
+
+DosServer::~DosServer()
+{
+    stop();
 }
 
 void DosServer::stop()
 {
-    cout << "Stopping server" << endl;
-    exit_thread_flag = true;
-    m_runner.join();
-    cout << "Server " << " now stopped" << endl;
+    if (!exit_thread_flag)
+    {
+        cout << "Stopping server" << endl;
+
+        exit_thread_flag = true;
+
+        const DosServer::RequestMsg stop_msg = { string{}, -1 };
+        for (int i = 0; i < m_runners.size(); i++) m_msg_queue.enqueue(stop_msg);
+        cout << "Awaiting runners to shut down..." << endl;
+        for (auto &t : m_runners) t.join();
+
+        close(m_sockfd);
+
+        cout << "Awaiting server to shut down..." << endl;
+        m_server.join();
+
+        cout << "Server " << " now stopped" << endl;
+    }
 }
