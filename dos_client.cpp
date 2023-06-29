@@ -4,6 +4,7 @@
 #include <thread>
 #include <atomic>
 #include <cstring>
+#include <sstream>
 
 // platform-specific
 #include <sys/types.h>
@@ -36,7 +37,9 @@ static void send_http_request(int id, string &host_addr, int host_port)
     sockaddr_in serv_addr;
     memset(&serv_addr, 0, sizeof(serv_addr));
     inet_pton(AF_INET, host_addr.c_str(), &(serv_addr.sin_addr));
-    serv_addr.sin_port = host_port;
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(host_port);
+    //memcpy(&serv_addr.sin_addr, host_addr.c_str(), host_addr.size());
     cout << "Connecting to " << inet_ntoa(serv_addr.sin_addr) << ":" << serv_addr.sin_port << "..." << endl;
     if (connect(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
     {
@@ -44,6 +47,24 @@ static void send_http_request(int id, string &host_addr, int host_port)
         close(sockfd);
         return;
     }
+
+    stringstream ss;
+    ss << "GET /?clientId=" << id << "\r\n"
+       << "Accept: application/json\r\n"
+       << "\r\n\r\n";
+    string request = ss.str();
+
+    if (send(sockfd, request.c_str(), request.length(), MSG_NOSIGNAL) != (int)request.length()) {
+        cout << "Error sending request." << endl;
+        close(sockfd);
+        return;
+    }
+
+    char cur;
+    while ( read(sockfd, &cur, 1) > 0 ) {
+        cout << cur;
+    }
+
     cout << "Closing socket " << sockfd << "..." << endl;
     close(sockfd);
 }
