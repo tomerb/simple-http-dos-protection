@@ -59,7 +59,7 @@ int main(int argc, char *argv[])
 
     do
     {
-        cout << dos_clients.size() << " DoS clients now running...\nHit Enter to quite" << endl;
+        cout << dos_clients.size() << " DoS clients now running...\nHit Enter to quit" << endl;
     } while (cin.get() != '\n');
 
     stop_clients(dos_clients);
