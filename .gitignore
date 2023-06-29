@@ -43,3 +43,4 @@ _deps
 *.out
 *.app
 dos_clients
+dos_server
