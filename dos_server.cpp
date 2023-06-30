@@ -1,9 +1,11 @@
 // std
 #include <atomic>
 #include <map>
-#include <array>
+#include <queue>
 #include <iostream>
 #include <cstring>
+#include <ctime>
+#include <cassert>
 
 // platform-specific
 #include <sys/types.h>
@@ -19,11 +21,14 @@
 using namespace std;
 
 static const int SERVER_PORT = 8080;
+static const int REQUESTS_WINDOW_SECONDS = 5;
+static const int MAX_REQUESTS_PER_WINDOW = 5;
 
 static atomic<bool> exit_thread_flag{false};
 
 // client_id -> last incoming requests for that client
-static map<int, array<long, 5>> last_requests;
+static map<int, queue<time_t>> last_requests;
+static mutex requests_mutex;
 
 static const string HTTP_OK = "HTTP/1.1 200 OK\r\n"                  \
                               "Content-Type: application/json\r\n"   \
@@ -40,15 +45,28 @@ struct IncomingRequest
     int client_port;
 };
 
-static bool allow_request()
+static bool allow_request(int client_id)
 {
+    lock_guard lock(requests_mutex);
+    auto item = last_requests.find(client_id);
+    assert (item != last_requests.end());
+    if (item != last_requests.end())
+    {
+        if (item->second.size() < MAX_REQUESTS_PER_WINDOW)
+        {
+            return true;
+        }
+
+        auto current_window_secs = (item->second.back() - item->second.front()) / 1000;
+        return current_window_secs > REQUESTS_WINDOW_SECONDS;
+    }
     return false;
 }
 
 static bool send_response(int socket, int client_id)
 {
-    const string &response = client_id == 0 ? HTTP_OK : HTTP_SERVICE_UNAVAILABLE;
-    int bytes_sent = send(socket, response.c_str(), response.length(), MSG_NOSIGNAL);
+    const string &response = allow_request(client_id) ? HTTP_OK : HTTP_SERVICE_UNAVAILABLE;
+    const int bytes_sent = send(socket, response.c_str(), response.length(), MSG_NOSIGNAL);
     return bytes_sent == response.length();
 }
 
@@ -71,6 +89,25 @@ static int extract_client_id(const string &request)
     return -1;
 }
 
+static void push_new_request(int client_id)
+{
+
+    lock_guard lock(requests_mutex);
+    auto item = last_requests.find(client_id);
+    if (item != last_requests.end())
+    {
+        if (item->second.size() == MAX_REQUESTS_PER_WINDOW)
+        {
+            item->second.pop();
+        }
+        item->second.push(time(nullptr));
+    }
+    else
+    {
+        last_requests[client_id] = queue<time_t>({time(nullptr)});
+    }
+}
+
 static void server_runner(SafeMsgQueue<DosServer::RequestMsg> &msg_queue)
 {
     while (!exit_thread_flag)
@@ -91,6 +128,8 @@ static void server_runner(SafeMsgQueue<DosServer::RequestMsg> &msg_queue)
             }
             continue;
         }
+
+        push_new_request(client_id_from_request);
 
         if (!send_response(msg.sockfd, client_id_from_request))
         {
