@@ -75,9 +75,9 @@ static void do_dos(int id, string host_addr, int host_port)
     {
         send_http_request(id, host_addr, host_port);
 
-        const int interval = 1 + (rand() % 10);
+        const int interval = (1 + (rand() % 10)) * 200;
         cout << "Thread " << id << " going to sleep for " << interval << " seconds" << endl;
-        this_thread::sleep_for(chrono::seconds(interval));
+        this_thread::sleep_for(chrono::milliseconds(interval));
     }
 }
 
