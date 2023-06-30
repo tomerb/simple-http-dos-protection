@@ -32,12 +32,12 @@ static mutex requests_mutex;
 
 static const string HTTP_OK = "HTTP/1.1 200 OK\r\n"                  \
                               "Content-Type: application/json\r\n"   \
-                              "Content-Length: 21\r\n"               \
-                              "{\"result\":\"allowed\"}";
+                              "Content-Length: 19\r\n"               \
+                              "{\"result\":\"allow\"}";
 static const string HTTP_SERVICE_UNAVAILABLE = "HTTP/1.1 503 Service Unavailable\r\n" \
                               "Content-Type: application/json\r\n"                    \
-                              "Content-Length: 25\r\n"                                \
-                              "{\"result\":\"not allowed\"}";
+                              "Content-Length: 18\r\n"                                \
+                              "{\"result\":\"deny\"}";
 
 struct IncomingRequest
 {
@@ -54,10 +54,12 @@ static bool allow_request(int client_id)
     {
         if (item->second.size() < MAX_REQUESTS_PER_WINDOW)
         {
+            cout << "Server will allow request for the number of requests is still smaller than the max allows" << endl;
             return true;
         }
 
-        auto current_window_secs = (item->second.back() - item->second.front()) / 1000;
+        auto current_window_secs = (item->second.back() - item->second.front());
+        cout << "Current window seconds: " << current_window_secs << endl;
         return current_window_secs > REQUESTS_WINDOW_SECONDS;
     }
     return false;
